@@ -1,6 +1,3 @@
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-
 import streamlit as st
 import requests
 import json
@@ -255,8 +252,13 @@ class ReferenceVerifier:
                 
                 # Match title
                 if title and item.get('title'):
-                    item_title = item['title'][0] if isinstance(item['title'], list) and item['title'] else item.get('title', '')
-                    title_similarity = self._text_similarity(title.lower(), str(item_title).lower())
+                    # Safe handling of title list
+                    if isinstance(item.get('title'), list) and len(item.get('title')) > 0:
+                        item_title = item['title'][0]
+                    else:
+                        item_title = str(item.get('title', ''))
+                    
+                    title_similarity = self._text_similarity(title.lower(), item_title.lower())
                     score += title_similarity * 3
                 
                 # Match authors
@@ -271,16 +273,18 @@ class ReferenceVerifier:
                 # Match year
                 if year and item.get('published'):
                     published_parts = item.get('published', {}).get('date-parts', [[]])
-                    if published_parts and published_parts[0] and str(year) == str(published_parts[0][0]):
-                        score += 2
+                    if published_parts and len(published_parts) > 0 and len(published_parts[0]) > 0:
+                        pub_year = published_parts[0][0]
+                        if str(year) == str(pub_year):
+                            score += 2
                 
                 if score > best_score:
                     best_score = score
                     best_match = item
             
             # Require a minimum score to consider it a match
-            if best_score > 2:
-                # Extract author names
+            if best_score > 2 and best_match:
+                # Extract author names safely
                 authors = []
                 for author in best_match.get('author', []):
                     given = author.get('given', '')
@@ -290,18 +294,31 @@ class ReferenceVerifier:
                     elif family:
                         authors.append(family)
                 
-                # Extract publication date
+                # Extract publication date safely
                 year = ""
                 if best_match.get('published', {}).get('date-parts'):
                     date_parts = best_match['published']['date-parts'][0]
                     if date_parts and len(date_parts) > 0:
                         year = date_parts[0]
                 
+                # Get title safely
+                if isinstance(best_match.get('title'), list) and len(best_match.get('title', [])) > 0:
+                    title = best_match['title'][0]
+                else:
+                    title = str(best_match.get('title', ''))
+                    
+                # Get journal safely
+                journal = ""
+                if isinstance(best_match.get('container-title'), list) and len(best_match.get('container-title', [])) > 0:
+                    journal = best_match['container-title'][0]
+                else:
+                    journal = str(best_match.get('container-title', ''))
+                
                 return {
-                    'title': best_match['title'][0] if isinstance(best_match.get('title'), list) and best_match['title'] else best_match.get('title', ''),
+                    'title': title,
                     'authors': authors,
                     'year': year,
-                    'journal': best_match.get('container-title', [''])[0] if isinstance(best_match.get('container-title'), list) else best_match.get('container-title', ''),
+                    'journal': journal,
                     'url': best_match.get('URL', ''),
                     'doi': best_match.get('DOI', ''),
                     'abstract': ''  # CrossRef doesn't typically provide abstracts
@@ -763,9 +780,9 @@ def create_streamlit_app():
                                 st.subheader("DOI:")
                                 st.markdown(f"[{details['doi']}](https://doi.org/{details['doi']})")
                             
-                            # Show full details in expandable section
-                            with st.expander("View Reference Details"):
-                                st.json(details)
+                            # Show reference details directly (without an expander when inside another expander)
+                            st.subheader("Reference Details:")
+                            st.json(details)
                             
                             # Find claims that use this reference
                             matching_claims = []
@@ -781,8 +798,7 @@ def create_streamlit_app():
                                 for j, claim_text in enumerate(matching_claims):
                                     with st.spinner(f"Verifying claim {j+1}"):
                                         is_supported, reasoning = verifier.verify_claim_with_reference(claim_text, details)
-                                        
-                                        if is_supported:
+if is_supported:
                                             st.success(f"✅ Claim {j+1}: {claim_text}")
                                             st.write(reasoning)
                                         else:
@@ -807,9 +823,9 @@ def create_streamlit_app():
                                                         if alt_details.get('doi'):
                                                             st.markdown(f"**DOI:** [{alt_details['doi']}](https://doi.org/{alt_details['doi']})")
                                                         
-                                                        # Show full details in expandable section
-                                                        with st.expander("View Alternative Reference Details"):
-                                                            st.json(alt_details)
+                                                        # Show reference details directly
+                                                        st.subheader("Alternative Reference Details:")
+                                                        st.json(alt_details)
                                                         
                                                         # Verify if the alternative reference supports the claim
                                                         alt_supported, alt_reasoning = verifier.verify_claim_with_reference(claim_text, alt_details)
@@ -850,9 +866,9 @@ def create_streamlit_app():
                                         if alt_details.get('doi'):
                                             st.markdown(f"**DOI:** [{alt_details['doi']}](https://doi.org/{alt_details['doi']})")
                                         
-                                        # Show full details in expandable section
-                                        with st.expander("View Alternative Reference Details"):
-                                            st.json(alt_details)
+                                        # Show reference details directly
+                                        st.subheader("Alternative Reference Details:")
+                                        st.json(alt_details)
                                     else:
                                         st.error("❌ Alternative reference could not be verified")
                                         st.json(alt_ref)
