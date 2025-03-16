@@ -52,9 +52,9 @@ def load_api_keys():
 class ReferenceVerifier:
     """Class for verifying academic references and claims."""
     
-    def __init__(self):
+    def __init__(self, semantic_scholar_client=None):
         self.openai_client = openai.OpenAI(api_key=openai.api_key)
-        self.ss = ss  # This might be None if the API key is unavailable
+        self.ss = semantic_scholar_client  # This might be None if the API key is unavailable
     
     def extract_references(self, ai_output: str) -> List[Dict]:
         """Extract academic references from an AI-generated output.
@@ -652,10 +652,10 @@ def create_streamlit_app():
     openai.api_key = openai_api_key
     
     # Initialize Semantic Scholar only if API key is available
-    ss = None
+    semantic_scholar_client = None
     if semanticscholar_api_key:
         try:
-            ss = SemanticScholar(api_key=semanticscholar_api_key)
+            semantic_scholar_client = SemanticScholar(api_key=semanticscholar_api_key)
             logger.info("Semantic Scholar API initialized successfully")
         except Exception as e:
             logger.warning(f"Could not initialize Semantic Scholar API: {str(e)}")
@@ -664,7 +664,7 @@ def create_streamlit_app():
         logger.info("No Semantic Scholar API key provided, this data source will be skipped")
         st.sidebar.info("Semantic Scholar API key not provided. The app will use other data sources.")
     
-    verifier = ReferenceVerifier()
+    verifier = ReferenceVerifier(semantic_scholar_client=semantic_scholar_client)
     
     with st.form("reference_form"):
         ai_output = st.text_area(
