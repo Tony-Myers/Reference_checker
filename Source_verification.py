@@ -236,15 +236,43 @@ class ReferenceVerifier:
         """
         query = f"{reference.get('title', '')} {' '.join(reference.get('authors', []))}"
         try:
-            search_query = scholarly.search_pubs(query)
-            results = []
+            # Create a scholarly search query
+            search_query = scholarly.search_author(query)
+            # This creates a generator with search results
             
             # Get first 5 results
+            results = []
             for _ in range(5):
                 try:
-                    results.append(next(search_query))
+                    # scholarly.search_pubs no longer exists in newer versions
+                    # Instead, search for authors and then look at their publications
+                    author = next(search_query)
+                    author_id = author['scholar_id']
+                    author_data = scholarly.fill(author)
+                    
+                    # Look through author's publications
+                    if 'publications' in author_data:
+                        for pub in list(author_data['publications'].values())[:3]:  # Get first 3 publications per author
+                            results.append(pub)
+                            if len(results) >= 5:  # Limit to 5 total results
+                                break
                 except StopIteration:
                     break
+                except Exception as e:
+                    logger.warning(f"Error getting publications for author: {str(e)}")
+                    continue
+            
+            if not results:
+                # Try another approach with general search
+                try:
+                    search_query = scholarly.search_keyword(query)
+                    for _ in range(5):
+                        try:
+                            results.append(next(search_query))
+                        except StopIteration:
+                            break
+                except Exception as e:
+                    logger.warning(f"Error with keyword search: {str(e)}")
             
             if not results:
                 return None
