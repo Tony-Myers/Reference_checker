@@ -4,5 +4,4 @@ requests
 python-dotenv
 semanticscholar
 scholarly
-logging
 python-json-logger
