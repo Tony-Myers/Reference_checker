@@ -1,4 +1,13 @@
-import streamlit as st
+def _text_similarity(self, text1: str, text2: str) -> float:
+        """Calculate simple similarity between two text strings.
+        
+        Args:
+            text1: First text string
+            text2: Second text string
+            
+        Returns:
+            Similarity score between 0 and 1
+        """import streamlit as st
 import requests
 import json
 import os
@@ -474,49 +483,73 @@ class ReferenceVerifier:
         # Reference not found in any source
         return False, None, "Not found"
     
-    def find_alternative_reference(self, claim: str, failed_reference: Dict) -> Optional[Dict]:
+    def find_alternative_reference(self, claim: str, failed_reference: Dict, 
+                                max_attempts: int = 4) -> Optional[Dict]:
         """Find an alternative reference for a claim when the original reference is not found.
         
         Args:
             claim: The claim text that needs a reference
             failed_reference: The original reference that couldn't be found
+            max_attempts: Maximum number of attempts to find an alternative
             
         Returns:
             Dictionary with alternative reference details if found, None otherwise
         """
-        prompt = f"""
-        I need to find an alternative academic reference for this claim:
-        
-        "{claim}"
-        
-        The original reference was not found:
-        {json.dumps(failed_reference, indent=2)}
-        
-        Please search academic sources to find a credible, verifiable reference that supports this claim.
-        Prioritize recent papers (last 5 years) from reputable journals.
-        Include full citation details: authors, title, year, journal, DOI, and URL if available.
-        
-        Format the response as a JSON object with these fields.
-        """
-        
-        try:
-            response = self.openai_client.chat.completions.create(
-                model="gpt-4o",  # Use a model with internet browsing capability
-                messages=[{"role": "user", "content": prompt}],
-                response_format={"type": "json_object"}
-            )
+        for attempt in range(max_attempts):
+            logger.info(f"Attempt {attempt+1} of {max_attempts} to find alternative reference")
             
-            result = json.loads(response.choices[0].message.content)
+            # Add information about previous attempts in later iterations
+            previous_attempts_text = ""
+            if attempt > 0:
+                previous_attempts_text = f"\nThis is attempt {attempt+1} of {max_attempts}. "
+                previous_attempts_text += "Please try different search terms, journals, or authors than previous attempts."
             
-            # Validate that we got a useful result
-            if not result.get('title') or not result.get('authors'):
-                return None
+            prompt = f"""
+            I need to find an alternative academic reference for this claim:
+            
+            "{claim}"
+            
+            The original reference was not found:
+            {json.dumps(failed_reference, indent=2)}
+            {previous_attempts_text}
+            
+            Please search academic sources to find a credible, verifiable reference that supports this claim.
+            Prioritize recent papers (last 5 years) from reputable journals.
+            Include full citation details: authors, title, year, journal, DOI, and URL if available.
+            
+            Format the response as a JSON object with these fields.
+            """
+            
+            try:
+                response = self.openai_client.chat.completions.create(
+                    model="gpt-4o",  # Use a model with internet browsing capability
+                    messages=[{"role": "user", "content": prompt}],
+                    response_format={"type": "json_object"}
+                )
                 
-            return result
+                result = json.loads(response.choices[0].message.content)
+                
+                # Validate that we got a useful result
+                if not result.get('title') or not result.get('authors'):
+                    logger.warning(f"Attempt {attempt+1}: Got incomplete reference data")
+                    continue
+                
+                # Verify this alternative reference actually exists
+                exists, details, source = self.verify_reference_exists(result)
+                if exists:
+                    logger.info(f"Found verified alternative reference on attempt {attempt+1}")
+                    return result
+                
+                logger.warning(f"Attempt {attempt+1}: Found reference but couldn't verify it exists")
+                
+            except Exception as e:
+                logger.error(f"Error finding alternative reference (attempt {attempt+1}): {str(e)}")
             
-        except Exception as e:
-            logger.error(f"Error finding alternative reference: {str(e)}")
-            return None
+            # Short delay between attempts to avoid rate limiting
+            time.sleep(1)
+                
+        logger.warning("All attempts to find alternative reference failed")
+        return None
     
     def verify_claim_with_reference(self, claim: str, reference_details: Dict) -> Tuple[bool, str]:
         """Verify if a claim is supported by the reference.
@@ -577,16 +610,72 @@ class ReferenceVerifier:
             logger.error(f"Error verifying claim: {str(e)}")
             return False, f"Error during verification: {str(e)}"
     
-    def _text_similarity(self, text1: str, text2: str) -> float:
-        """Calculate simple similarity between two text strings.
+    def format_apa_reference(self, reference: Dict) -> str:
+        """Format reference details into APA style citation.
         
         Args:
-            text1: First text string
-            text2: Second text string
+            reference: Dictionary with reference details
             
         Returns:
-            Similarity score between 0 and 1
+            String with APA formatted reference
         """
+        try:
+            # Extract required components
+            authors = reference.get('authors', [])
+            year = reference.get('year', '')
+            title = reference.get('title', '')
+            journal = reference.get('journal', '')
+            doi = reference.get('doi', '')
+            url = reference.get('url', '')
+            
+            # Format authors (Last, F. I., & Last, F. I.)
+            formatted_authors = ""
+            if authors:
+                author_list = []
+                for author in authors:
+                    parts = author.split()
+                    if len(parts) > 1:
+                        # Last name then initials
+                        last = parts[-1]
+                        initials = ''.join([p[0] + '.' for p in parts[:-1]])
+                        author_list.append(f"{last}, {initials}")
+                    else:
+                        # Just use the whole name if can't parse
+                        author_list.append(author)
+                
+                if len(author_list) == 1:
+                    formatted_authors = author_list[0]
+                elif len(author_list) == 2:
+                    formatted_authors = f"{author_list[0]} & {author_list[1]}"
+                else:
+                    formatted_authors = ", ".join(author_list[:-1]) + ", & " + author_list[-1]
+            
+            # Format title (only capitalize first word and proper nouns)
+            formatted_title = title
+            
+            # Format journal (in italics - we'll use markdown)
+            formatted_journal = f"*{journal}*" if journal else ""
+            
+            # Format DOI or URL if available
+            doi_or_url = ""
+            if doi:
+                doi_or_url = f"https://doi.org/{doi}"
+            elif url:
+                doi_or_url = url
+            
+            # Assemble the APA reference
+            apa_reference = f"{formatted_authors} ({year}). {formatted_title}. "
+            if formatted_journal:
+                apa_reference += f"{formatted_journal}. "
+            if doi_or_url:
+                apa_reference += f"{doi_or_url}"
+            
+            return apa_reference
+            
+        except Exception as e:
+            logger.error(f"Error formatting APA reference: {str(e)}")
+            # Return basic citation if formatting fails
+            return f"{', '.join(reference.get('authors', []))} ({reference.get('year', '')}). {reference.get('title', '')}."
         # Simple Jaccard similarity for word sets
         words1 = set(re.findall(r'\w+', text1.lower()))
         words2 = set(re.findall(r'\w+', text2.lower()))
@@ -704,7 +793,20 @@ def create_streamlit_app():
                         
                         if exists:
                             st.success(f"✅ Reference found in {source}")
-                            st.json(details)
+                            
+                            # Generate and display APA citation
+                            apa_citation = verifier.format_apa_reference(details)
+                            st.subheader("APA Citation:")
+                            st.markdown(apa_citation)
+                            
+                            # Display DOI if available
+                            if details.get('doi'):
+                                st.subheader("DOI:")
+                                st.markdown(f"[{details['doi']}](https://doi.org/{details['doi']})")
+                            
+                            # Show full details in expandable section
+                            with st.expander("View Reference Details"):
+                                st.json(details)
                             
                             # Find claims that use this reference
                             matching_claims = []
@@ -759,20 +861,32 @@ def create_streamlit_app():
                             with st.spinner("Finding alternative reference..."):
                                 # Use the first claim that might be related or create a generic query
                                 search_text = claims[0].get('claim') if claims else f"Research about {ref.get('title')}"
-                                alt_ref = verifier.find_alternative_reference(search_text, ref)
+                                alt_ref = verifier.find_alternative_reference(search_text, ref, max_attempts=4)
                                 
                                 if alt_ref:
                                     st.subheader("Alternative Reference Suggestion:")
-                                    st.json(alt_ref)
                                     
                                     # Verify the alternative reference
                                     alt_exists, alt_details, alt_source = verifier.verify_reference_exists(alt_ref)
                                     if alt_exists:
                                         st.success(f"✅ Alternative reference verified in {alt_source}")
+                                        
+                                        # Show APA citation for alternative reference
+                                        alt_apa_citation = verifier.format_apa_reference(alt_details)
+                                        st.markdown(alt_apa_citation)
+                                        
+                                        # Display DOI if available
+                                        if alt_details.get('doi'):
+                                            st.markdown(f"**DOI:** [{alt_details['doi']}](https://doi.org/{alt_details['doi']})")
+                                        
+                                        # Show full details in expandable section
+                                        with st.expander("View Alternative Reference Details"):
+                                            st.json(alt_details)
                                     else:
                                         st.error("❌ Alternative reference could not be verified")
+                                        st.json(alt_ref)
                                 else:
-                                    st.error("❌ No suitable alternative reference found")
+                                    st.error("❌ No suitable alternative reference found after multiple attempts")
 
 if __name__ == "__main__":
     create_streamlit_app()
