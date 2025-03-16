@@ -798,7 +798,8 @@ def create_streamlit_app():
                                 for j, claim_text in enumerate(matching_claims):
                                     with st.spinner(f"Verifying claim {j+1}"):
                                         is_supported, reasoning = verifier.verify_claim_with_reference(claim_text, details)
-if is_supported:
+                                        
+                                        if is_supported:
                                             st.success(f"✅ Claim {j+1}: {claim_text}")
                                             st.write(reasoning)
                                         else:
