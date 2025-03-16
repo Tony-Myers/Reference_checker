@@ -1,13 +1,7 @@
-def _text_similarity(self, text1: str, text2: str) -> float:
-        """Calculate simple similarity between two text strings.
-        
-        Args:
-            text1: First text string
-            text2: Second text string
-            
-        Returns:
-            Similarity score between 0 and 1
-        """import streamlit as st
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+
+import streamlit as st
 import requests
 import json
 import os
@@ -16,8 +10,6 @@ from typing import Dict, List, Tuple, Optional
 import time
 import openai
 from semanticscholar import SemanticScholar
-import scholarly
-import requests
 import logging
 
 # Set up logging
@@ -225,103 +217,6 @@ class ReferenceVerifier:
             logger.error(f"Error searching Semantic Scholar: {str(e)}")
             return None
     
-    def search_google_scholar(self, reference: Dict) -> Optional[Dict]:
-        """Search Google Scholar for a reference.
-        
-        Args:
-            reference: Dictionary with reference details
-            
-        Returns:
-            Dictionary with paper details if found, None otherwise
-        """
-        query = f"{reference.get('title', '')} {' '.join(reference.get('authors', []))}"
-        try:
-            # Create a scholarly search query
-            search_query = scholarly.search_author(query)
-            # This creates a generator with search results
-            
-            # Get first 5 results
-            results = []
-            for _ in range(5):
-                try:
-                    # scholarly.search_pubs no longer exists in newer versions
-                    # Instead, search for authors and then look at their publications
-                    author = next(search_query)
-                    author_id = author['scholar_id']
-                    author_data = scholarly.fill(author)
-                    
-                    # Look through author's publications
-                    if 'publications' in author_data:
-                        for pub in list(author_data['publications'].values())[:3]:  # Get first 3 publications per author
-                            results.append(pub)
-                            if len(results) >= 5:  # Limit to 5 total results
-                                break
-                except StopIteration:
-                    break
-                except Exception as e:
-                    logger.warning(f"Error getting publications for author: {str(e)}")
-                    continue
-            
-            if not results:
-                # Try another approach with general search
-                try:
-                    search_query = scholarly.search_keyword(query)
-                    for _ in range(5):
-                        try:
-                            results.append(next(search_query))
-                        except StopIteration:
-                            break
-                except Exception as e:
-                    logger.warning(f"Error with keyword search: {str(e)}")
-            
-            if not results:
-                return None
-            
-            # Simple matching algorithm
-            best_match = None
-            best_score = 0
-            
-            for result in results:
-                score = 0
-                # Match title
-                if reference.get('title') and result.get('bib', {}).get('title'):
-                    title_similarity = self._text_similarity(
-                        reference['title'].lower(), 
-                        result.get('bib', {}).get('title', '').lower()
-                    )
-                    score += title_similarity * 3
-                
-                # Match authors
-                if reference.get('authors') and result.get('bib', {}).get('author'):
-                    for ref_author in reference.get('authors', []):
-                        if any(ref_author.lower() in auth.lower() for auth in result.get('bib', {}).get('author', [])):
-                            score += 1
-                
-                # Match year
-                if (reference.get('year') and result.get('bib', {}).get('pub_year') and 
-                    str(reference['year']) == str(result.get('bib', {}).get('pub_year'))):
-                    score += 2
-                
-                if score > best_score:
-                    best_score = score
-                    best_match = result
-            
-            # Require a minimum score to consider it a match
-            if best_score > 3 and best_match:
-                return {
-                    'title': best_match.get('bib', {}).get('title'),
-                    'authors': best_match.get('bib', {}).get('author'),
-                    'year': best_match.get('bib', {}).get('pub_year'),
-                    'journal': best_match.get('bib', {}).get('venue'),
-                    'url': best_match.get('pub_url'),
-                    'abstract': best_match.get('bib', {}).get('abstract')
-                }
-            return None
-        
-        except Exception as e:
-            logger.error(f"Error searching Google Scholar: {str(e)}")
-            return None
-    
     def search_crossref(self, reference: Dict) -> Optional[Dict]:
         """Search CrossRef API for a reference.
         
@@ -490,23 +385,48 @@ class ReferenceVerifier:
         Returns:
             Tuple of (exists (bool), paper_details (Dict), source (str))
         """
-        # Try Semantic Scholar first
-        logger.info(f"Searching Semantic Scholar for: {reference.get('title')}")
-        paper = self.search_semanticscholar(reference)
-        if paper:
-            return True, paper, "Semantic Scholar"
+        search_results = []
+        sources = []
         
-        # Try Google Scholar next
-        logger.info(f"Searching Google Scholar for: {reference.get('title')}")
-        paper = self.search_google_scholar(reference)
-        if paper:
-            return True, paper, "Google Scholar"
+        # Check if Semantic Scholar is available
+        if hasattr(self, 'ss') and self.ss is not None:
+            logger.info(f"Searching Semantic Scholar for: {reference.get('title')}")
+            try:
+                paper = self.search_semanticscholar(reference)
+                if paper:
+                    search_results.append(paper)
+                    sources.append("Semantic Scholar")
+            except Exception as e:
+                logger.warning(f"Error searching Semantic Scholar: {str(e)}")
+        else:
+            logger.warning("Semantic Scholar API not initialized, skipping this source")
         
-        # Try ResearchGate last
+        # Try CrossRef (reliable and doesn't require API key)
+        logger.info(f"Searching CrossRef for: {reference.get('title')}")
+        try:
+            paper = self.search_crossref(reference)
+            if paper:
+                search_results.append(paper)
+                sources.append("CrossRef")
+        except Exception as e:
+            logger.warning(f"Error searching CrossRef: {str(e)}")
+        
+        # Skip Google Scholar - it's causing issues
+        logger.info(f"Skipping Google Scholar due to API compatibility issues")
+        
+        # Try ResearchGate
         logger.info(f"Searching ResearchGate for: {reference.get('title')}")
-        paper = self.search_researchgate(reference)
-        if paper:
-            return True, paper, "ResearchGate"
+        try:
+            paper = self.search_researchgate(reference)
+            if paper:
+                search_results.append(paper)
+                sources.append("ResearchGate")
+        except Exception as e:
+            logger.warning(f"Error searching ResearchGate: {str(e)}")
+        
+        # Return the first valid result if any are found
+        if search_results:
+            return True, search_results[0], sources[0]
         
         # Reference not found in any source
         return False, None, "Not found"
@@ -704,6 +624,17 @@ class ReferenceVerifier:
             logger.error(f"Error formatting APA reference: {str(e)}")
             # Return basic citation if formatting fails
             return f"{', '.join(reference.get('authors', []))} ({reference.get('year', '')}). {reference.get('title', '')}."
+            
+    def _text_similarity(self, text1: str, text2: str) -> float:
+        """Calculate simple similarity between two text strings.
+        
+        Args:
+            text1: First text string
+            text2: Second text string
+            
+        Returns:
+            Similarity score between 0 and 1
+        """
         # Simple Jaccard similarity for word sets
         words1 = set(re.findall(r'\w+', text1.lower()))
         words2 = set(re.findall(r'\w+', text2.lower()))
@@ -859,15 +790,26 @@ def create_streamlit_app():
                                             st.write(reasoning)
                                             
                                             with st.spinner("Finding alternative reference for this claim..."):
-                                                alt_ref = verifier.find_alternative_reference(claim_text, ref)
+                                                alt_ref = verifier.find_alternative_reference(claim_text, ref, max_attempts=4)
                                                 if alt_ref:
                                                     st.subheader("Alternative Reference Suggestion:")
-                                                    st.json(alt_ref)
                                                     
                                                     # Verify the alternative reference
                                                     alt_exists, alt_details, alt_source = verifier.verify_reference_exists(alt_ref)
                                                     if alt_exists:
                                                         st.success(f"✅ Alternative reference verified in {alt_source}")
+                                                        
+                                                        # Show APA citation for alternative reference
+                                                        alt_apa_citation = verifier.format_apa_reference(alt_details)
+                                                        st.markdown(alt_apa_citation)
+                                                        
+                                                        # Display DOI if available
+                                                        if alt_details.get('doi'):
+                                                            st.markdown(f"**DOI:** [{alt_details['doi']}](https://doi.org/{alt_details['doi']})")
+                                                        
+                                                        # Show full details in expandable section
+                                                        with st.expander("View Alternative Reference Details"):
+                                                            st.json(alt_details)
                                                         
                                                         # Verify if the alternative reference supports the claim
                                                         alt_supported, alt_reasoning = verifier.verify_claim_with_reference(claim_text, alt_details)
@@ -879,8 +821,9 @@ def create_streamlit_app():
                                                             st.write(alt_reasoning)
                                                     else:
                                                         st.error("❌ Alternative reference could not be verified")
+                                                        st.json(alt_ref)
                                                 else:
-                                                    st.error("❌ No suitable alternative reference found")
+                                                    st.error("❌ No suitable alternative reference found after multiple attempts")
                             else:
                                 st.info("No claims were found linked to this reference.")
                         else:
