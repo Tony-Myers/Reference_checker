@@ -56,16 +56,19 @@ class ReferenceVerifier:
 
     def extract_references(self, ai_output: str) -> List[Dict]:
         """Extract academic references from an AI-generated output."""
-        prompt = f"""
-        Extract all academic references from the following text. For each reference, provide:
-        1. Authors
-        2. Title
-        3. Year
-        4. Journal/Conference/Publisher
-        5. DOI (if present)
-        6. URL (if present)
+    prompt = f'''
+        Please extract all academic references from the following text. Note that references might appear as numeric citations in the text (e.g. "1–5") and as a separate, numbered reference list. For any numeric range (e.g. "1–5"), assume that each number in the range corresponds to a distinct reference and expand them accordingly. 
+            
+        For each reference, extract the following details:
+        1. Reference number (if available)
+        2. Authors (as a list of names)
+        3. Title
+        4. Year
+        5. Journal, Conference, or Publisher
+        6. DOI (if available)
+        7. URL (if available)
 
-        Format the output as a JSON list of objects, with each object containing the fields above.
+        Return the output as a JSON array of objects, where each object corresponds to one reference with the above fields. For any missing information, use an empty string or null.
 
         Text:
         {ai_output}
