@@ -75,49 +75,59 @@ class ReferenceVerifier:
     """Class for verifying academic references and claims."""
     
     def __init__(self, semantic_scholar_client=None):
-        self.openai_client = openai.OpenAI(api_key=openai.api_key)
+        # Ensure that openai.api_key is set before instantiating this class.
+        self.openai_client = openai  # using the openai module directly.
         self.ss = semantic_scholar_client
 
     def extract_references(self, ai_output: str) -> List[Dict]:
-        """Extract academic references from an AI-generated output."""
-    prompt = f'''
-        Please extract all academic references from the following text. Note that references might appear as numeric citations in the text (e.g. "1–5") and as a separate, numbered reference list. For any numeric range (e.g. "1–5"), assume that each number in the range corresponds to a distinct reference and expand them accordingly. 
-            
-        For each reference, extract the following details:
-        1. Reference number (if available)
-        2. Authors (as a list of names)
-        3. Title
-        4. Year
-        5. Journal, Conference, or Publisher
-        6. DOI (if available)
-        7. URL (if available)
-
-        Return the output as a JSON array of objects, where each object corresponds to one reference with the above fields. For any missing information, use an empty string or null.
-
-        Text:
-        {ai_output}
         """
-        response = self.openai_client.chat.completions.create(
+        Extract academic references from an AI-generated output.
+        This method pre-processes the text to expand numeric ranges,
+        uses a revised prompt to instruct the model to extract each reference separately,
+        and then validates the results.
+        """
+        # Pre-process the text to expand numeric ranges.
+        processed_text = expand_numeric_ranges(ai_output)
+        
+        # Revised prompt with explicit instructions.
+        prompt = dedent(f'''\
+            Please extract all academic references from the following text. Note that references may appear as numeric citations in the text (e.g. "1–5") and as a separate, numbered reference list. For any numeric range (e.g. "1–5"), assume that each number corresponds to a distinct reference and expand them accordingly.
+
+            For each reference, extract the following details:
+            1. Reference number (if available)
+            2. Authors (as a list)
+            3. Title
+            4. Year
+            5. Journal/Conference/Publisher
+            6. DOI (if available)
+            7. URL (if available)
+
+            Return the output as a JSON array of objects. For any missing information, use an empty string or null.
+
+            Text:
+            {processed_text}
+            ''')
+        
+        # Call the OpenAI ChatCompletion API.
+        response = self.openai_client.ChatCompletion.create(
             model="gpt-4o",
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"}
         )
+        
         try:
             result = json.loads(response.choices[0].message.content)
-            if "references" in result:
-                return result["references"]
+            # Expecting a JSON array or a dictionary with a "references" key.
+            if isinstance(result, list):
+                refs = result
             else:
-                # Try to extract any JSON array from the response
-                matches = re.findall(r'\[.*\]', response.choices[0].message.content, re.DOTALL)
-                if matches:
-                    try:
-                        return json.loads(matches[0])
-                    except Exception:
-                        logger.error("Failed to parse references from extracted JSON array")
-                return []
+                refs = result.get("references", [])
+            # Validate the references.
+            return validate_references(refs)
         except json.JSONDecodeError:
-            logger.error("Failed to parse JSON from response")
+            logger.error("Failed to parse JSON from the OpenAI response.")
             return []
+
 
     
     def extract_claims_with_citations(self, ai_output: str) -> List[Dict]:
