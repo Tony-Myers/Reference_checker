@@ -10,9 +10,33 @@ from semanticscholar import SemanticScholar
 import logging
 
 # Set up logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
+def expand_numeric_ranges(text: str) -> str:
+    """
+    Replace numeric ranges (e.g. "1–5" or "1-5") with a comma-separated list 
+    (e.g. "1, 2, 3, 4, 5") in the text.
+    """
+    def replacer(match):
+        start = int(match.group(1))
+        end = int(match.group(2))
+        numbers = ", ".join(str(n) for n in range(start, end + 1))
+        return numbers
+    pattern = r'(\d+)[–-](\d+)'  # matches en dash or hyphen between numbers
+    return re.sub(pattern, replacer, text)
+
+def validate_references(refs: List[Dict]) -> List[Dict]:
+    """
+    If a 'reference_number' field is present in any reference,
+    log a warning if the numbers do not appear contiguous.
+    """
+    numbers = [int(ref.get("reference_number")) for ref in refs if ref.get("reference_number")]
+    if numbers:
+        sorted_nums = sorted(numbers)
+        if sorted_nums[-1] - sorted_nums[0] != len(sorted_nums) - 1:
+            logger.warning("Reference numbers appear non-contiguous. Please review the extraction results.")
+    return refs
+    
 # Load API keys from Streamlit secrets or environment variables
 def load_api_keys():
     """Load API keys from Streamlit secrets, environment variables, or .env file."""
