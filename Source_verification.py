@@ -52,17 +52,10 @@ class ReferenceVerifier:
     
     def __init__(self, semantic_scholar_client=None):
         self.openai_client = openai.OpenAI(api_key=openai.api_key)
-        self.ss = semantic_scholar_client  # This might be None if the API key is unavailable
-    
+        self.ss = semantic_scholar_client
+
     def extract_references(self, ai_output: str) -> List[Dict]:
-        """Extract academic references from an AI-generated output.
-        
-        Args:
-            ai_output: Text containing academic references
-            
-        Returns:
-            List of dictionaries with reference details
-        """
+        """Extract academic references from an AI-generated output."""
         prompt = f"""
         Extract all academic references from the following text. For each reference, provide:
         1. Authors
@@ -71,36 +64,34 @@ class ReferenceVerifier:
         4. Journal/Conference/Publisher
         5. DOI (if present)
         6. URL (if present)
-        
+
         Format the output as a JSON list of objects, with each object containing the fields above.
-        
+
         Text:
         {ai_output}
         """
-        
         response = self.openai_client.chat.completions.create(
             model="gpt-4o",
             messages=[{"role": "user", "content": prompt}],
             response_format={"type": "json_object"}
         )
-        
         try:
             result = json.loads(response.choices[0].message.content)
             if "references" in result:
                 return result["references"]
             else:
                 # Try to extract any JSON array from the response
-                text = response.choices[0].message.content
-                matches = re.findall(r'\[.*\]', text, re.DOTALL)
+                matches = re.findall(r'\[.*\]', response.choices[0].message.content, re.DOTALL)
                 if matches:
                     try:
                         return json.loads(matches[0])
-                    except:
+                    except Exception:
                         logger.error("Failed to parse references from extracted JSON array")
                 return []
         except json.JSONDecodeError:
-            logger.error(f"Failed to parse JSON from response: {response.choices[0].message.content}")
+            logger.error("Failed to parse JSON from response")
             return []
+
     
     def extract_claims_with_citations(self, ai_output: str) -> List[Dict]:
         """Extract claims and their associated citations from text.
