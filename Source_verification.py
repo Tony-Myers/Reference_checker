@@ -750,73 +750,73 @@ class ReferenceVerifier:
         # Reference not found in any source
         return False, None, "Not found"
     
-    def find_alternative_reference(self, claim: str, failed_reference: Dict, 
-                                max_attempts: int = 4) -> Optional[Dict]:
-        """Find an alternative reference for a claim when the original reference is not found.
+  def find_alternative_reference(self, claim: str, failed_reference: Dict, 
+                            max_attempts: int = 4) -> Optional[Dict]:
+    """Find an alternative reference for a claim when the original reference is not found.
+    
+    Args:
+        claim: The claim text that needs a reference
+        failed_reference: The original reference that couldn't be found
+        max_attempts: Maximum number of attempts to find an alternative
         
-        Args:
-            claim: The claim text that needs a reference
-            failed_reference: The original reference that couldn't be found
-            max_attempts: Maximum number of attempts to find an alternative
-            
-        Returns:
-            Dictionary with alternative reference details if found, None otherwise
+    Returns:
+        Dictionary with alternative reference details if found, None otherwise
+    """
+    for attempt in range(max_attempts):
+        logger.info(f"Attempt {attempt+1} of {max_attempts} to find alternative reference")
+        
+        # Add information about previous attempts in later iterations
+        previous_attempts_text = ""
+        if attempt > 0:
+            previous_attempts_text = f"\nThis is attempt {attempt+1} of {max_attempts}. "
+            previous_attempts_text += "Please try different search terms, journals, or authors than previous attempts."
+        
+        prompt = f"""
+        I need to find an alternative academic reference for this claim:
+        
+        "{claim}"
+        
+        The original reference was not found:
+        {json.dumps(failed_reference, indent=2)}
+        {previous_attempts_text}
+        
+        Please search academic sources to find a credible, verifiable reference that supports this claim.
+        Prioritize recent papers (last 5 years) from reputable journals.
+        Include full citation details: authors, title, year, journal, DOI, and URL if available.
+        
+        Format the response as a JSON object with these fields.
         """
-        for attempt in range(max_attempts):
-            logger.info(f"Attempt {attempt+1} of {max_attempts} to find alternative reference")
+        
+        try:
+            response = self.openai_client.chat.completions.create(
+                model="gpt-4o",  # Use a model with internet browsing capability
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"}
+            )
             
-            # Add information about previous attempts in later iterations
-            previous_attempts_text = ""
-            if attempt > 0:
-                previous_attempts_text = f"\nThis is attempt {attempt+1} of {max_attempts}. "
-                previous_attempts_text += "Please try different search terms, journals, or authors than previous attempts."
+            result = json.loads(response.choices[0].message.content)
             
-            prompt = f"""
-            I need to find an alternative academic reference for this claim:
+            # Validate that we got a useful result
+            if not result.get('title') or not result.get('authors'):
+                logger.warning(f"Attempt {attempt+1}: Got incomplete reference data")
+                continue
             
-            "{claim}"
+            # Verify this alternative reference actually exists
+            exists, details, source = self.advanced_verify_reference_exists(result)
+            if exists:
+                logger.info(f"Found verified alternative reference on attempt {attempt+1}")
+                return result
             
-            The original reference was not found:
-            {json.dumps(failed_reference, indent=2)}
-            {previous_attempts_text}
+            logger.warning(f"Attempt {attempt+1}: Found reference but couldn't verify it exists")
             
-            Please search academic sources to find a credible, verifiable reference that supports this claim.
-            Prioritize recent papers (last 5 years) from reputable journals.
-            Include full citation details: authors, title, year, journal, DOI, and URL if available.
+        except Exception as e:
+            logger.error(f"Error finding alternative reference (attempt {attempt+1}): {str(e)}")
+        
+        # Short delay between attempts to avoid rate limiting
+        time.sleep(1)
             
-            Format the response as a JSON object with these fields.
-           
-            
-            try:
-                response = self.openai_client.chat.completions.create(
-                    model="gpt-4o",  # Use a model with internet browsing capability
-                    messages=[{"role": "user", "content": prompt}],
-                    response_format={"type": "json_object"}
-                )
-                
-                result = json.loads(response.choices[0].message.content)
-                
-                # Validate that we got a useful result
-                if not result.get('title') or not result.get('authors'):
-                    logger.warning(f"Attempt {attempt+1}: Got incomplete reference data")
-                    continue
-                
-                # Verify this alternative reference actually exists
-                exists, details, source = self.advanced_verify_reference_exists(result)
-                if exists:
-                    logger.info(f"Found verified alternative reference on attempt {attempt+1}")
-                    return result
-                
-                logger.warning(f"Attempt {attempt+1}: Found reference but couldn't verify it exists")
-                
-            except Exception as e:
-                logger.error(f"Error finding alternative reference (attempt {attempt+1}): {str(e)}")
-            
-            # Short delay between attempts to avoid rate limiting
-            time.sleep(1)
-                
-        logger.warning("All attempts to find alternative reference failed")
-        return None
+    logger.warning("All attempts to find alternative reference failed")
+    return None
     
     def verify_claim_with_reference(self, claim: str, reference_details: Dict) -> Tuple[bool, str]:
         """Verify if a claim is supported by the reference.
