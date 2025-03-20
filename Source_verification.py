@@ -723,11 +723,10 @@ class ReferenceVerifier:
             5. DOI or URL
             6. Brief description of the content
             
-            Format as a JSON object. If you cannot find anything that could be a match, return a JSON with "found": false.
-            """
+            Format as a JSON object. If you cannot find anything that could be a match, return a JSON with "found": false
             
-            try:
-                response = self.openai_client.chat.completions.create(
+         try:
+             response = self.openai_client.chat.completions.create(
                     model="gpt-4o",
                     messages=[{"role": "user", "content": prompt}],
                     response_format={"type": "json_object"}
@@ -786,7 +785,7 @@ class ReferenceVerifier:
             Include full citation details: authors, title, year, journal, DOI, and URL if available.
             
             Format the response as a JSON object with these fields.
-            """
+           
             
             try:
                 response = self.openai_client.chat.completions.create(
@@ -858,7 +857,7 @@ class ReferenceVerifier:
         - "confidence": number between 0-1
         - "reasoning": detailed explanation of your evaluation
         - "evidence": any specific text from the abstract that supports or contradicts the claim
-        """
+      
         
         try:
             response = self.openai_client.chat.completions.create(
@@ -877,3 +876,369 @@ class ReferenceVerifier:
         except Exception as e:
             logger.error(f"Error verifying claim: {str(e)}")
             return False, f"Error during verification: {str(e)}"
+            def format_apa_reference(self, reference: Dict) -> str:
+        """Format reference details into APA style citation.
+        
+        Args:
+            reference: Dictionary with reference details
+            
+        Returns:
+            String with APA formatted reference
+        """
+        try:
+            # Extract required components
+            authors = reference.get('authors', [])
+            year = reference.get('year', '')
+            title = reference.get('title', '')
+            journal = reference.get('journal', '')
+            doi = reference.get('doi', '')
+            url = reference.get('url', '')
+            
+            # Format authors (Last, F. I., & Last, F. I.)
+            formatted_authors = ""
+            if authors:
+                author_list = []
+                for author in authors:
+                    parts = author.split()
+                    if len(parts) > 1:
+                        # Last name then initials
+                        last = parts[-1]
+                        initials = ''.join([p[0] + '.' for p in parts[:-1]])
+                        author_list.append(f"{last}, {initials}")
+                    else:
+                        # Just use the whole name if can't parse
+                        author_list.append(author)
+                
+                if len(author_list) == 1:
+                    formatted_authors = author_list[0]
+                elif len(author_list) == 2:
+                    formatted_authors = f"{author_list[0]} & {author_list[1]}"
+                else:
+                    formatted_authors = ", ".join(author_list[:-1]) + ", & " + author_list[-1]
+            
+            # Format title (only capitalize first word and proper nouns)
+            formatted_title = title
+            
+            # Format journal (in italics - we'll use markdown)
+            formatted_journal = f"*{journal}*" if journal else ""
+            
+            # Format DOI or URL if available
+            doi_or_url = ""
+            if doi:
+                doi_or_url = f"https://doi.org/{doi}"
+            elif url:
+                doi_or_url = url
+            
+            # Assemble the APA reference
+            apa_reference = f"{formatted_authors} ({year}). {formatted_title}. "
+            if formatted_journal:
+                apa_reference += f"{formatted_journal}. "
+            if doi_or_url:
+                apa_reference += f"{doi_or_url}"
+            
+            return apa_reference
+            
+        except Exception as e:
+            logger.error(f"Error formatting APA reference: {str(e)}")
+            # Return basic citation if formatting fails
+            return f"{', '.join(reference.get('authors', []))} ({reference.get('year', '')}). {reference.get('title', '')}."
+            
+    def _text_similarity(self, text1: str, text2: str) -> float:
+        """Calculate simple similarity between two text strings.
+        
+        Args:
+            text1: First text string
+            text2: Second text string
+            
+        Returns:
+            Similarity score between 0 and 1
+        """
+        # Simple Jaccard similarity for word sets
+        words1 = set(re.findall(r'\w+', text1.lower()))
+        words2 = set(re.findall(r'\w+', text2.lower()))
+        
+        if not words1 or not words2:
+            return 0
+        
+        intersection = words1.intersection(words2)
+        union = words1.union(words2)
+        
+        return len(intersection) / len(union)
+
+
+def create_streamlit_app():
+    """Create and run the Streamlit app for the reference verifier."""
+    st.set_page_config(
+        page_title="Academic Reference Verifier",
+        page_icon="📚",
+        layout="wide"
+    )
+    
+    st.title("Academic Reference Verification Agent")
+    
+    # Check if app is password protected
+    try:
+        openai_api_key, semanticscholar_api_key, app_password = load_api_keys()
+        is_password_protected = app_password is not None
+    except Exception as e:
+        st.error(f"Error loading configuration: {str(e)}")
+        st.stop()
+    
+    # Authentication section
+    authenticated = False
+    
+    if is_password_protected:
+        st.sidebar.title("Authentication")
+        password_input = st.sidebar.text_input("Enter password", type="password")
+        
+        if password_input:
+            if password_input == app_password:
+                authenticated = True
+                st.sidebar.success("Authentication successful! ✅")
+            else:
+                st.sidebar.error("Incorrect password ❌")
+    else:
+        # No password required
+        authenticated = True
+    
+    if not authenticated:
+        st.info("Please enter the password in the sidebar to access this application.")
+        st.stop()
+    
+    # Main application (only shown if authenticated)
+    st.markdown("""
+    This tool verifies academic references and claims in AI-generated content using multiple search strategies:
+
+    1. Paste your AI-generated text with academic references
+    2. The agent will verify if each reference exists using:
+       - Direct DOI lookup
+       - Semantic Scholar (if available)
+       - CrossRef
+       - ResearchGate
+       - Google Search
+       - Google Scholar
+    3. For each claim, it will verify if the reference supports it
+    4. If a reference doesn't exist or doesn't support a claim, alternative sources will be suggested
+    """)
+    
+    # Add search settings in the sidebar
+    st.sidebar.title("Search Settings")
+    search_thoroughness = st.sidebar.select_slider(
+        "Search thoroughness",
+        options=["Fast", "Standard", "Thorough"],
+        value="Standard",
+        help="Fast: Quick searches only. Standard: Regular search strategy. Thorough: Try all possible search methods (slower but more comprehensive)"
+    )
+    
+    # Initialize API clients after authentication
+    openai.api_key = openai_api_key
+    
+    # Initialize Semantic Scholar only if API key is available
+    semantic_scholar_client = None
+    if semanticscholar_api_key:
+        try:
+            semantic_scholar_client = SemanticScholar(api_key=semanticscholar_api_key)
+            logger.info("Semantic Scholar API initialized successfully")
+        except Exception as e:
+            logger.warning(f"Could not initialize Semantic Scholar API: {str(e)}")
+            st.sidebar.warning("Semantic Scholar API not available. The app will use other data sources.")
+    else:
+        logger.info("No Semantic Scholar API key provided, this data source will be skipped")
+        st.sidebar.info("Semantic Scholar API key not provided. The app will use other data sources.")
+    
+    verifier = ReferenceVerifier(semantic_scholar_client=semantic_scholar_client)
+    
+    with st.form("reference_form"):
+        ai_output = st.text_area(
+            "Paste AI-generated text with academic references",
+            height=300,
+            help="Include the full text with claims and their citations."
+        )
+        
+        submitted = st.form_submit_button("Verify References")
+    
+    if submitted and ai_output:
+        with st.spinner("Extracting references and claims..."):
+            references = verifier.extract_references(ai_output)
+            claims = verifier.extract_claims_with_citations(ai_output)
+            
+            st.subheader("Extracted References")
+            if references:
+                for i, ref in enumerate(references):
+                    st.write(f"{i+1}. {ref.get('title')} ({ref.get('year')})")
+            else:
+                st.warning("No references were extracted. Make sure your text includes properly formatted citations.")
+            
+            st.subheader("Extracted Claims")
+            if claims:
+                for i, claim_obj in enumerate(claims):
+                    st.write(f"{i+1}. {claim_obj.get('claim')} [Citation: {claim_obj.get('citation')}]")
+            else:
+                st.warning("No claims with citations were extracted.")
+        
+        if references:
+            st.subheader("Reference Verification Results")
+            
+            for i, ref in enumerate(references):
+                with st.expander(f"Reference {i+1}: {ref.get('title')}", expanded=True):
+                    with st.spinner(f"Verifying reference: {ref.get('title')}"):
+                        # Choose verification method based on the selected thoroughness level
+                        if search_thoroughness == "Fast":
+                            # Use CrossRef only for fastest results
+                            paper = verifier.search_crossref(ref)
+                            exists = paper is not None
+                            details = paper
+                            source = "CrossRef"
+                        elif search_thoroughness == "Thorough":
+                            # Use the most comprehensive search
+                            exists, details, source = verifier.advanced_verify_reference_exists(ref)
+                        else:
+                            # Standard search
+                            exists, details, source = verifier.verify_reference_exists(ref)
+                        
+                        if exists:
+                            st.success(f"✅ Reference found in {source}")
+                            # Add info about which search method was successful
+                            st.info(f"Search method used: {source}")
+                            
+                            # Generate and display APA citation
+                            apa_citation = verifier.format_apa_reference(details)
+                            st.subheader("APA Citation:")
+                            st.markdown(apa_citation)
+                            
+                            # Display DOI if available
+                            if details.get('doi'):
+                                st.subheader("DOI:")
+                                st.markdown(f"[{details['doi']}](https://doi.org/{details['doi']})")
+                            
+                            # Show reference details directly (without an expander when inside another expander)
+                            st.subheader("Reference Details:")
+                            st.json(details)
+                            
+                            # Find claims that use this reference
+                            matching_claims = []
+                            for claim_obj in claims:
+                                # This matching logic would need to be customized based on your citation style
+                                citation = claim_obj.get('citation', '')
+                                # Simple heuristic: if author name or year appears in the citation
+                                if any(author.split()[-1] in citation for author in ref.get('authors', [])) or str(ref.get('year', '')) in citation:
+                                    matching_claims.append(claim_obj.get('claim'))
+                            
+                            if matching_claims:
+                                st.subheader("Claims supported by this reference:")
+                                for j, claim_text in enumerate(matching_claims):
+                                    with st.spinner(f"Verifying claim {j+1}"):
+                                        is_supported, reasoning = verifier.verify_claim_with_reference(claim_text, details)
+                                        
+                                        if is_supported:
+                                            st.success(f"✅ Claim {j+1}: {claim_text}")
+                                            st.write(reasoning)
+                                        else:
+                                            st.error(f"❌ Claim {j+1}: {claim_text}")
+                                            st.write(reasoning)
+                                            
+                                            with st.spinner("Finding alternative reference for this claim..."):
+                                                alt_ref = verifier.find_alternative_reference(claim_text, ref, max_attempts=4)
+                                                if alt_ref:
+                                                    st.subheader("Alternative Reference Suggestion:")
+                                                    
+                                                    # Verify the alternative reference
+                                                    # Use advanced verification for thorough searches
+                                                    if search_thoroughness == "Thorough":
+                                                        alt_exists, alt_details, alt_source = verifier.advanced_verify_reference_exists(alt_ref)
+                                                    else:
+                                                        alt_exists, alt_details, alt_source = verifier.verify_reference_exists(alt_ref)
+                                                    
+                                                    if alt_exists:
+                                                        st.success(f"✅ Alternative reference verified in {alt_source}")
+                                                        st.info(f"Search method used: {alt_source}")
+                                                        
+                                                        # Show APA citation for alternative reference
+                                                        alt_apa_citation = verifier.format_apa_reference(alt_details)
+                                                        st.markdown(alt_apa_citation)
+                                                        
+                                                        # Display DOI if available
+                                                        if alt_details.get('doi'):
+                                                            st.markdown(f"**DOI:** [{alt_details['doi']}](https://doi.org/{alt_details['doi']})")
+                                                        
+                                                        # Show reference details directly
+                                                        st.subheader("Alternative Reference Details:")
+                                                        st.json(alt_details)
+                                                        
+                                                        # Verify if the alternative reference supports the claim
+                                                        alt_supported, alt_reasoning = verifier.verify_claim_with_reference(claim_text, alt_details)
+                                                        if alt_supported:
+                                                            st.success("✅ Alternative reference supports the claim")
+                                                            st.write(alt_reasoning)
+                                                        else:
+                                                            st.error("❌ Alternative reference does not support the claim")
+                                                            st.write(alt_reasoning)
+                                                    else:
+                                                        st.error("❌ Alternative reference could not be verified")
+                                                        st.json(alt_ref)
+                                                else:
+                                                    st.error("❌ No suitable alternative reference found after multiple attempts")
+                            else:
+                                st.info("No claims were found linked to this reference.")
+                        else:
+                            st.error("❌ Reference not found in any academic database")
+                            
+                            # Try advanced search if not already used and not fast mode
+                            if search_thoroughness != "Fast" and search_thoroughness != "Thorough":
+                                st.warning("Attempting advanced search strategies...")
+                                exists, details, source = verifier.advanced_verify_reference_exists(ref)
+                                if exists:
+                                    st.success(f"✅ Reference found with advanced search in {source}")
+                                    st.info(f"Advanced search method used: {source}")
+                                    
+                                    # Display the same details as above
+                                    apa_citation = verifier.format_apa_reference(details)
+                                    st.subheader("APA Citation:")
+                                    st.markdown(apa_citation)
+                                    
+                                    if details.get('doi'):
+                                        st.subheader("DOI:")
+                                        st.markdown(f"[{details['doi']}](https://doi.org/{details['doi']})")
+                                    
+                                    st.subheader("Reference Details:")
+                                    st.json(details)
+                                else:
+                                    # If still not found after trying advanced search
+                                    with st.spinner("Finding alternative reference..."):
+                                        # Use the first claim that might be related or create a generic query
+                                        search_text = claims[0].get('claim') if claims else f"Research about {ref.get('title')}"
+                                        alt_ref = verifier.find_alternative_reference(search_text, ref, max_attempts=4)
+                                        
+                                        if alt_ref:
+                                            st.subheader("Alternative Reference Suggestion:")
+                                            
+                                            # Verify the alternative reference with appropriate strategy
+                                            if search_thoroughness == "Thorough":
+                                                alt_exists, alt_details, alt_source = verifier.advanced_verify_reference_exists(alt_ref)
+                                            else:
+                                                alt_exists, alt_details, alt_source = verifier.verify_reference_exists(alt_ref)
+                                                
+                                            if alt_exists:
+                                                st.success(f"✅ Alternative reference verified in {alt_source}")
+                                                st.info(f"Search method used: {alt_source}")
+                                                
+                                                # Show APA citation for alternative reference
+                                                alt_apa_citation = verifier.format_apa_reference(alt_details)
+                                                st.markdown(alt_apa_citation)
+                                                
+                                                # Display DOI if available
+                                                if alt_details.get('doi'):
+                                                    st.markdown(f"**DOI:** [{alt_details['doi']}](https://doi.org/{alt_details['doi']})")
+                                                
+                                                # Show reference details directly
+                                                st.subheader("Alternative Reference Details:")
+                                                st.json(alt_details)
+                                            else:
+                                                st.error("❌ Alternative reference could not be verified")
+                                                st.json(alt_ref)
+                                        else:
+                                            st.error("❌ No suitable alternative reference found after multiple attempts")
+
+
+if __name__ == "__main__":
+    create_streamlit_app()
