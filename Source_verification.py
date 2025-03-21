@@ -7,6 +7,7 @@ from typing import Dict, List, Tuple, Optional
 import time
 import openai
 from semanticscholar import SemanticScholar
+from textwrap import dedent
 import logging
 
 # Set up logging
@@ -24,6 +25,18 @@ def expand_numeric_ranges(text: str) -> str:
         return numbers
     pattern = r'(\d+)[–-](\d+)'  # matches en dash or hyphen between numbers
     return re.sub(pattern, replacer, text)
+
+def extract_reference_list_section(text: str) -> str:
+    """
+    Extracts the portion of the text that is the reference list.
+    Assumes the reference list starts at the first line that begins with a number followed by a period.
+    """
+    lines = text.splitlines()
+    for idx, line in enumerate(lines):
+        if re.match(r'^\s*\d+\.', line):
+            return "\n".join(lines[idx:])
+    return text  # If no reference list found, return the whole text.
+
 
 def validate_references(refs: List[Dict]) -> List[Dict]:
     """
@@ -75,36 +88,42 @@ class ReferenceVerifier:
     """Class for verifying academic references and claims."""
     
     def __init__(self, semantic_scholar_client=None):
-        # Ensure that openai.api_key is set before instantiating this class.
+        # Make sure openai.api_key is already set.
         self.openai_client = openai  # using the openai module directly.
         self.ss = semantic_scholar_client
 
     def extract_references(self, ai_output: str) -> List[Dict]:
         """
         Extract academic references from an AI-generated output.
-        This method pre-processes the text to expand numeric ranges,
-        uses a revised prompt to instruct the model to extract each reference separately,
-        and then validates the results.
-        """
-        # Pre-process the text to expand numeric ranges.
-        processed_text = expand_numeric_ranges(ai_output)
-        
-        # Revised prompt with explicit instructions.
-        prompt = dedent(f'''\
-            Please extract all academic references from the following text. Note that references may appear as numeric citations in the text (e.g. "1–5") and as a separate, numbered reference list. For any numeric range (e.g. "1–5"), assume that each number corresponds to a distinct reference and expand them accordingly.
 
+        This method first extracts only the reference list portion of the text,
+        applies pre‑processing to expand numeric ranges,
+        then uses a revised prompt to instruct the model to extract the references from that list.
+        Finally, it validates the results.
+        """
+        # Step 1: Extract the reference list portion.
+        ref_list_text = extract_reference_list_section(ai_output)
+        
+        # Step 2: (Optional) Expand numeric ranges in the reference list.
+        processed_text = expand_numeric_ranges(ref_list_text)
+        
+        # Step 3: Revised prompt to focus only on the reference list.
+        prompt = dedent(f'''\
+            Please extract the academic references from the following reference list.
+            Ignore any in-text citations or any text that precedes the list.
+            The reference list is a numbered list where each reference starts with a number followed by a period.
             For each reference, extract the following details:
-            1. Reference number (if available)
-            2. Authors (as a list)
-            3. Title
-            4. Year
-            5. Journal/Conference/Publisher
-            6. DOI (if available)
-            7. URL (if available)
+              1. Reference number (if available)
+              2. Authors (as a list)
+              3. Title
+              4. Year
+              5. Journal/Conference/Publisher
+              6. DOI (if available)
+              7. URL (if available)
 
             Return the output as a JSON array of objects. For any missing information, use an empty string or null.
 
-            Text:
+            Reference list:
             {processed_text}
             ''')
         
@@ -122,7 +141,6 @@ class ReferenceVerifier:
                 refs = result
             else:
                 refs = result.get("references", [])
-            # Validate the references.
             return validate_references(refs)
         except json.JSONDecodeError:
             logger.error("Failed to parse JSON from the OpenAI response.")
