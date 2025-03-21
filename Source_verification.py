@@ -26,16 +26,54 @@ def expand_numeric_ranges(text: str) -> str:
     pattern = r'(\d+)[–-](\d+)'  # matches en dash or hyphen between numbers
     return re.sub(pattern, replacer, text)
 
-def extract_reference_list_section(text: str) -> str:
+def extract_references(self, ai_output: str) -> List[Dict]:
     """
-    Extracts the portion of the text that is the reference list.
-    Assumes the reference list starts at the first line that begins with a number followed by a period.
+    Extract academic references from an AI-generated output.
+    This method first extracts only the reference list portion,
+    applies pre‑processing to expand numeric ranges,
+    then instructs the model to parse only the numbered list.
     """
-    lines = text.splitlines()
-    for idx, line in enumerate(lines):
-        if re.match(r'^\s*\d+\.', line):
-            return "\n".join(lines[idx:])
-    return text  # If no reference list found, return the whole text.
+    # Extract only the reference list section.
+    ref_list_text = extract_reference_list_section(ai_output)
+    # Optional: Expand numeric ranges in the reference list.
+    processed_text = expand_numeric_ranges(ref_list_text)
+    
+    # Revised prompt: instruct the model to ignore all text outside the numbered list.
+    prompt = dedent(f'''\
+        The following text is a numbered reference list extracted from an academic article.
+        Please ignore any text that is not part of this list.
+        Each reference starts on a new line with a number followed by a period.
+        For each reference in this list, extract the following details:
+          1. "reference_number" (the number at the beginning, if available)
+          2. "authors" (as a list of names)
+          3. "title"
+          4. "year"
+          5. "journal" (or conference/publisher)
+          6. "doi" (if available)
+          7. "url" (if available)
+        Return your output as a JSON array of objects. Use an empty string or null for missing information.
+        
+        Reference List:
+        {processed_text}
+        ''')
+    
+    response = self.openai_client.ChatCompletion.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": prompt}],
+        response_format={"type": "json_object"}
+    )
+    
+    try:
+        result = json.loads(response.choices[0].message.content)
+        if isinstance(result, list):
+            refs = result
+        else:
+            refs = result.get("references", [])
+        return validate_references(refs)
+    except json.JSONDecodeError:
+        logger.error("Failed to parse JSON from the OpenAI response.")
+        return []
+
 
 
 def validate_references(refs: List[Dict]) -> List[Dict]:
