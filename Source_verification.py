@@ -26,32 +26,32 @@ def expand_numeric_ranges(text: str) -> str:
     pattern = r'(\d+)[–-](\d+)'  # matches en dash or hyphen between numbers
     return re.sub(pattern, replacer, text)
 
-def extract_references(self, ai_output: str) -> List[Dict]:
+ddef extract_references(self, ai_output: str) -> List[Dict]:
     """
     Extract academic references from an AI-generated output.
-    This method first extracts only the reference list portion,
+    This method extracts only the numbered reference list,
     applies pre‑processing to expand numeric ranges,
-    then instructs the model to parse only the numbered list.
+    then instructs the model to return full details for each reference.
     """
-    # Extract only the reference list section.
+    # Extract the reference list section using a helper function.
     ref_list_text = extract_reference_list_section(ai_output)
-    # Optional: Expand numeric ranges in the reference list.
+    # Expand numeric ranges if present.
     processed_text = expand_numeric_ranges(ref_list_text)
     
-    # Revised prompt: instruct the model to ignore all text outside the numbered list.
+    # Revised prompt: instruct the model to ignore any text that is not part of the numbered list.
     prompt = dedent(f'''\
         The following text is a numbered reference list extracted from an academic article.
         Please ignore any text that is not part of this list.
-        Each reference starts on a new line with a number followed by a period.
-        For each reference in this list, extract the following details:
-          1. "reference_number" (the number at the beginning, if available)
-          2. "authors" (as a list of names)
-          3. "title"
-          4. "year"
-          5. "journal" (or conference/publisher)
-          6. "doi" (if available)
-          7. "url" (if available)
-        Return your output as a JSON array of objects. Use an empty string or null for missing information.
+        Each reference is on its own line, starting with a number followed by a period.
+        For each reference, extract the following details:
+           - "reference_number": the number preceding the reference
+           - "authors": a list of author names
+           - "title": the title of the reference
+           - "year": the publication year
+           - "journal": the journal, conference, or publisher
+           - "doi": the DOI if available
+           - "url": the URL if available
+        Return your output strictly as a JSON array of objects. Use an empty string or null for missing information.
         
         Reference List:
         {processed_text}
@@ -63,6 +63,17 @@ def extract_references(self, ai_output: str) -> List[Dict]:
         response_format={"type": "json_object"}
     )
     
+    try:
+        result = json.loads(response.choices[0].message.content)
+        if isinstance(result, list):
+            refs = result
+        else:
+            refs = result.get("references", [])
+        return validate_references(refs)
+    except json.JSONDecodeError:
+        logger.error("Failed to parse JSON from the OpenAI response.")
+        return []
+
     try:
         result = json.loads(response.choices[0].message.content)
         if isinstance(result, list):
